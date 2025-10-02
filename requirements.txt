@@ -1,0 +1,6 @@
+streamlit>=1.25
+google-genai>=1.37.0
+python-dotenv
+PyPDF2
+python-docx
+markdown2
