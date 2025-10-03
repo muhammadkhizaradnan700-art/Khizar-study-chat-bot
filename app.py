@@ -19,12 +19,10 @@ Features:
 import os
 import io
 import time
-import html
 import tempfile
-from typing import Tuple, List, Dict
+from typing import Tuple
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 # File parsing libs
 from PyPDF2 import PdfReader
@@ -53,6 +51,21 @@ MAX_FILE_TEXT = 120000  # characters allowed from file
 MAX_PROMPT_CHUNK = 6000  # chunk size to send to LLM for file summarization
 
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
+
+# Basic theme/styles
+st.markdown(
+    """
+    <style>
+    .mode-btn {padding:10px 14px; border-radius:10px; border:1px solid #e5e7eb; cursor:pointer; margin-right:8px; background:linear-gradient(135deg,#f9fafb,#eef2ff);} 
+    .mode-btn.active {border-color:#7c3aed; box-shadow:0 0 0 3px rgba(124,58,237,0.15); background:linear-gradient(135deg,#ede9fe,#dbeafe);} 
+    .hero {padding:22px; border-radius:16px; background:linear-gradient(135deg,#1f2937,#0f172a); color:white; border:1px solid rgba(255,255,255,0.08);} 
+    .hero h2 {margin:0 0 8px 0;}
+    .pill {display:inline-block; padding:6px 10px; border-radius:999px; background:rgba(255,255,255,0.12); margin-right:8px; font-size:12px}
+    .chat-bin {background:#fee2e2; color:#991b1b; border:1px solid #fecaca; padding:8px 10px; border-radius:10px;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ----------------------
 # LLM helper functions
@@ -92,7 +105,7 @@ def generate_response(prompt: str, mode_meta: dict = None, max_output_tokens: in
             resp = gemini.models.generate_content(
                 model=MODEL_NAME_DEFAULT,
                 contents=assembled_prompt,
-                config={"max_output_tokens": max_output_tokens}
+                generation_config={"max_output_tokens": max_output_tokens, "temperature": 0.2}
             )
             if hasattr(resp, "text") and resp.text:
                 return resp.text
@@ -193,6 +206,10 @@ def init_session_state():
         st.session_state.files = []
     if "external_refs_enabled" not in st.session_state:
         st.session_state.external_refs_enabled = True
+    if "selected_mode" not in st.session_state:
+        st.session_state.selected_mode = "explain"  # explain | deep | quiz | review | coding
+    if "confirm_clear" not in st.session_state:
+        st.session_state.confirm_clear = False
 
 def push_chat(role: str, content: str, meta: dict = None):
     if meta is None:
@@ -212,10 +229,62 @@ def main():
     with st.sidebar:
         st.header("Options")
         st.session_state.external_refs_enabled = st.checkbox("Enable external references", value=st.session_state.external_refs_enabled)
-        if st.button("Clear chat"):
-            st.session_state.chat = []
-            st.session_state.files = []
-            st.rerun()
+        st.markdown("---")
+        st.markdown("<div class='chat-bin'>🗑️ Chat Bin</div>", unsafe_allow_html=True)
+        if not st.session_state.confirm_clear:
+            if st.button("Clear all chat"):
+                st.session_state.confirm_clear = True
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Confirm"):
+                    st.session_state.chat = []
+                    st.session_state.files = []
+                    st.session_state.confirm_clear = False
+                    st.rerun()
+            with c2:
+                if st.button("Cancel"):
+                    st.session_state.confirm_clear = False
+
+    # Mode toolbar
+    st.subheader("Modes")
+    m1, m2, m3, m4, m5 = st.columns([1,1,1,1,1])
+    with m1:
+        if st.button("Explain", key="mode_explain"):
+            st.session_state.selected_mode = "explain"
+    with m2:
+        if st.button("Deep Think", key="mode_deep"):
+            st.session_state.selected_mode = "deep"
+    with m3:
+        if st.button("Quiz", key="mode_quiz"):
+            st.session_state.selected_mode = "quiz"
+    with m4:
+        if st.button("Review", key="mode_review"):
+            st.session_state.selected_mode = "review"
+    with m5:
+        if st.button("Coding Help", key="mode_code"):
+            st.session_state.selected_mode = "coding"
+
+    st.caption(f"Active mode: {st.session_state.selected_mode}")
+
+    # Welcome hero
+    if len(st.session_state.chat) == 0:
+        st.markdown(
+            """
+            <div class="hero">
+                <h2>Welcome to Study Wise AI Tutor</h2>
+                Unlock concepts faster with clear steps, smart quizzes, and file/image understanding.
+                <div style="margin-top:8px;">
+                    <span class="pill">Explain</span>
+                    <span class="pill">Deep Think</span>
+                    <span class="pill">Quiz</span>
+                    <span class="pill">Review</span>
+                    <span class="pill">Coding</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # Display chat
     for msg in st.session_state.chat:
@@ -224,21 +293,81 @@ def main():
         else:
             st.chat_message("assistant").write(msg["content"])
 
+    # Uploaders row
+    ucol1, ucol2 = st.columns([1,1])
+    with ucol1:
+        uploaded = st.file_uploader("Upload document (pdf, docx, txt, md)", type=["pdf", "docx", "txt", "md"], key="doc_upl")
+    with ucol2:
+        image_file = st.file_uploader("Upload image (png, jpg, jpeg)", type=["png", "jpg", "jpeg"], key="img_upl")
+
     # Input area
     user_input = st.chat_input("Ask a question...")
-    uploaded = st.file_uploader("Upload file", type=["pdf", "docx", "txt", "md"])
 
     if uploaded:
         filename, text = parse_uploaded_file(uploaded)
         push_chat("user", f"Uploaded file: {filename}")
+        if not text or text.startswith("[Error"):
+            push_chat("assistant", "Sorry, I couldn't read that file. Please try another format or a clearer copy.")
+            st.rerun()
         analysis_prompt = f"Summarize and analyze this document:\n{text[:MAX_PROMPT_CHUNK]}"
-        resp = generate_response(analysis_prompt)
+        # Token strategy per mode
+        mode = st.session_state.selected_mode
+        mode_reason = "review"
+        max_tokens = 500
+        if mode == "deep":
+            mode_reason = "deep_thinking"
+            max_tokens = 900
+        elif mode == "quiz":
+            mode_reason = "quiz"
+            max_tokens = 600
+        elif mode == "coding":
+            mode_reason = "coding_help"
+            max_tokens = 700
+        resp = generate_response(analysis_prompt, mode_meta={"external_refs": st.session_state.external_refs_enabled, "reasoning": mode_reason}, max_output_tokens=max_tokens)
         push_chat("assistant", resp)
         st.rerun()
 
+    if image_file:
+        try:
+            image_bytes = image_file.read()
+            push_chat("user", f"Uploaded image: {image_file.name}")
+            st.image(image_bytes, caption=image_file.name, use_column_width=True)
+            mode = st.session_state.selected_mode
+            mode_reason = "explain"
+            if mode == "deep":
+                mode_reason = "deep_thinking"
+            elif mode == "quiz":
+                mode_reason = "quiz"
+            elif mode == "review":
+                mode_reason = "review"
+            elif mode == "coding":
+                mode_reason = "coding_help"
+            prompt = "Describe the key information in the uploaded image and how it relates to studying. If text is present, summarize it."
+            resp = generate_response(prompt, mode_meta={"external_refs": st.session_state.external_refs_enabled, "reasoning": mode_reason}, max_output_tokens=600)
+            push_chat("assistant", resp)
+            st.rerun()
+        except Exception as _e:
+            push_chat("assistant", "Image preview added. Analysis not available.")
+            st.rerun()
+
     if user_input:
         push_chat("user", user_input)
-        resp = generate_response(user_input)
+        mode = st.session_state.selected_mode
+        mode_reason = "explain"
+        max_tokens = 500
+        if mode == "deep":
+            mode_reason = "deep_thinking"
+            max_tokens = 900
+        elif mode == "quiz":
+            mode_reason = "quiz"
+            max_tokens = 600
+        elif mode == "review":
+            mode_reason = "review"
+            max_tokens = 600
+        elif mode == "coding":
+            mode_reason = "coding_help"
+            max_tokens = 700
+        resp = generate_response(user_input, mode_meta={"external_refs": st.session_state.external_refs_enabled, "reasoning": mode_reason}, max_output_tokens=max_tokens)
         push_chat("assistant", resp)
         st.rerun()
 
