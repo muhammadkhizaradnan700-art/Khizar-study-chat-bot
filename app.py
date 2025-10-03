@@ -23,6 +23,7 @@ import tempfile
 from typing import Tuple
 
 import streamlit as st
+from dotenv import load_dotenv
 
 # File parsing libs
 from PyPDF2 import PdfReader
@@ -50,6 +51,8 @@ MODEL_NAME_DEFAULT = os.getenv("LLM_MODEL", "gemini-2.0-flash")
 MAX_FILE_TEXT = 120000  # characters allowed from file
 MAX_PROMPT_CHUNK = 6000  # chunk size to send to LLM for file summarization
 
+load_dotenv(override=False)
+
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
 # Basic theme/styles
@@ -71,11 +74,22 @@ st.markdown(
 # LLM helper functions
 # ----------------------
 
-def get_gemini_client():
-    api_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else None
-    if api_key and genai is not None:
-        return genai.Client(api_key=api_key)
-    return None
+def get_gemini_client_configured() -> bool:
+    api_key = os.getenv("GEMINI_API_KEY") or (st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else None)
+    if not api_key or genai is None:
+        return False
+    try:
+        # Newer google-genai SDK style
+        if hasattr(genai, "configure"):
+            genai.configure(api_key=api_key)
+            return True
+        # Fallback older style client (rare)
+        if hasattr(genai, "Client"):
+            _ = genai.Client(api_key=api_key)
+            return True
+    except Exception as _e:
+        return False
+    return False
 
 def get_openai_client():
     api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY") if "OPENAI_API_KEY" in st.secrets else None
@@ -98,18 +112,40 @@ def generate_response(prompt: str, mode_meta: dict = None, max_output_tokens: in
     reasoning = mode_meta.get("reasoning", "explain")
     assembled_prompt = f"{system_preamble}\nMode: {reasoning}\nExternalLinksAllowed: {external_flag}\n\n{prompt}"
 
-    # Try Gemini
-    gemini = get_gemini_client()
-    if gemini:
+    # Try Gemini (new SDK first)
+    if get_gemini_client_configured():
         try:
-            resp = gemini.models.generate_content(
-                model=MODEL_NAME_DEFAULT,
-                contents=assembled_prompt,
-                generation_config={"max_output_tokens": max_output_tokens, "temperature": 0.2}
-            )
-            if hasattr(resp, "text") and resp.text:
-                return resp.text
-            return str(resp)
+            if hasattr(genai, "GenerativeModel"):
+                try_models = [MODEL_NAME_DEFAULT, "gemini-1.5-flash"] if MODEL_NAME_DEFAULT != "gemini-1.5-flash" else [MODEL_NAME_DEFAULT]
+                last_err = None
+                for m in try_models:
+                    try:
+                        model = genai.GenerativeModel(m)
+                        resp = model.generate_content(assembled_prompt, generation_config={"max_output_tokens": max_output_tokens, "temperature": 0.2})
+                        # Prefer resp.text when available
+                        if hasattr(resp, "text") and resp.text:
+                            return resp.text
+                        # Fallback: attempt to extract first candidate text
+                        try:
+                            return resp.candidates[0].content.parts[0].text
+                        except Exception:
+                            return str(resp)
+                    except Exception as ee:
+                        last_err = ee
+                        continue
+                if last_err is not None:
+                    raise last_err
+            else:
+                # Older style fallback
+                if hasattr(genai, "models"):
+                    resp = genai.models.generate_content(
+                        model=MODEL_NAME_DEFAULT,
+                        contents=assembled_prompt,
+                        generation_config={"max_output_tokens": max_output_tokens, "temperature": 0.2}
+                    )
+                    if hasattr(resp, "text") and resp.text:
+                        return resp.text
+                    return str(resp)
         except Exception as e:
             st.error(f"Gemini error: {e}")
 
@@ -140,6 +176,7 @@ def generate_response(prompt: str, mode_meta: dict = None, max_output_tokens: in
         except Exception as e:
             st.error(f"OpenAI error: {e}")
 
+    st.warning("No working LLM client found (missing or invalid API key). Showing local fallback.")
     return ("[Local fallback response]\n\n"
             + (assembled_prompt[:800] + ("..." if len(assembled_prompt) > 800 else "")))
 
@@ -229,6 +266,10 @@ def main():
     with st.sidebar:
         st.header("Options")
         st.session_state.external_refs_enabled = st.checkbox("Enable external references", value=st.session_state.external_refs_enabled)
+        # API status
+        gemini_key_present = bool(os.getenv("GEMINI_API_KEY") or ("GEMINI_API_KEY" in st.secrets))
+        openai_key_present = bool(os.getenv("OPENAI_API_KEY") or ("OPENAI_API_KEY" in st.secrets))
+        st.caption(f"Gemini key: {'✅ found' if gemini_key_present else '❌ missing'} | OpenAI key: {'✅ found' if openai_key_present else '❌ missing'}")
         st.markdown("---")
         st.markdown("<div class='chat-bin'>🗑️ Chat Bin</div>", unsafe_allow_html=True)
         if not st.session_state.confirm_clear:
