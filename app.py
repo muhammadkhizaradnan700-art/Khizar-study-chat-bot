@@ -47,7 +47,7 @@ except Exception:
 
 PAGE_TITLE = "Study Wise Ai Tutor"
 PAGE_ICON = "✨"
-MODEL_NAME_DEFAULT = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+MODEL_NAME_DEFAULT = os.getenv("LLM_MODEL", "gemini-1.5-flash")
 MAX_FILE_TEXT = 120000  # characters allowed from file
 MAX_PROMPT_CHUNK = 6000  # chunk size to send to LLM for file summarization
 
@@ -116,7 +116,12 @@ def generate_response(prompt: str, mode_meta: dict = None, max_output_tokens: in
     if get_gemini_client_configured():
         try:
             if hasattr(genai, "GenerativeModel"):
-                try_models = [MODEL_NAME_DEFAULT, "gemini-1.5-flash"] if MODEL_NAME_DEFAULT != "gemini-1.5-flash" else [MODEL_NAME_DEFAULT]
+                try_models = [
+                    MODEL_NAME_DEFAULT,
+                    "gemini-1.5-flash",
+                    "gemini-1.5-pro",
+                    "gemini-1.0-pro",
+                ]
                 last_err = None
                 for m in try_models:
                     try:
@@ -200,15 +205,23 @@ def read_pdf_bytes(bytes_data: bytes) -> str:
         return f"[Error reading PDF: {e}]"
 
 def read_docx_bytes(bytes_data: bytes) -> str:
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
             tmp.write(bytes_data)
             tmp.flush()
-            doc = docx.Document(tmp.name)
-            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-            return "\n\n".join(paragraphs)
+            tmp_path = tmp.name
+        doc = docx.Document(tmp_path)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n\n".join(paragraphs)
     except Exception as e:
         return f"[Error reading DOCX: {e}]"
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
 def read_text_bytes(bytes_data: bytes, encoding="utf-8") -> str:
     try:
