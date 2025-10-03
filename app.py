@@ -181,9 +181,9 @@ def generate_response(prompt: str, mode_meta: dict = None, max_output_tokens: in
         except Exception as e:
             st.error(f"OpenAI error: {e}")
 
-    st.warning("No working LLM client found (missing or invalid API key). Showing local fallback.")
-    return ("[Local fallback response]\n\n"
-            + (assembled_prompt[:800] + ("..." if len(assembled_prompt) > 800 else "")))
+    # If no LLM works, show helpful message instead of fallback
+    st.info("💡 **No AI service available** - Please add your Gemini API key in the sidebar or .env file to get AI responses.")
+    return "I'm ready to help, but I need an API key to provide AI responses. Please add your Gemini API key to continue."
 
 # ----------------------
 # File parsing utilities
@@ -282,7 +282,9 @@ def main():
         # API status
         gemini_key_present = bool(os.getenv("GEMINI_API_KEY") or ("GEMINI_API_KEY" in st.secrets))
         openai_key_present = bool(os.getenv("OPENAI_API_KEY") or ("OPENAI_API_KEY" in st.secrets))
-        st.caption(f"Gemini key: {'✅ found' if gemini_key_present else '❌ missing'} | OpenAI key: {'✅ found' if openai_key_present else '❌ missing'}")
+        st.caption(f"Gemini key: {'✅ found' if gemini_key_present else '❌ missing'} | OpenAI key: {'✅ found' if openai_key_present else '❌ optional'}")
+        if not gemini_key_present:
+            st.warning("⚠️ Add GEMINI_API_KEY to .env file or environment")
         st.markdown("---")
         st.markdown("<div class='chat-bin'>🗑️ Chat Bin</div>", unsafe_allow_html=True)
         if not st.session_state.confirm_clear:
