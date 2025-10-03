@@ -78,7 +78,14 @@ st.markdown(
 # ----------------------
 
 def get_gemini_client_configured() -> bool:
-    api_key = os.getenv("GEMINI_API_KEY") or (st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else None)
+    api_key = os.getenv("GEMINI_API_KEY")
+    # Only check st.secrets if it exists
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = api_key or st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        pass  # st.secrets not available, use env only
+    
     if not api_key or genai is None:
         return False
     try:
@@ -96,7 +103,14 @@ def get_gemini_client_configured() -> bool:
     return False
 
 def get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY") if "OPENAI_API_KEY" in st.secrets else None
+    api_key = os.getenv("OPENAI_API_KEY")
+    # Only check st.secrets if it exists
+    try:
+        if "OPENAI_API_KEY" in st.secrets:
+            api_key = api_key or st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        pass  # st.secrets not available, use env only
+    
     if api_key and openai is not None:
         openai.api_key = api_key
         return openai
@@ -314,8 +328,16 @@ def main():
         st.header("Options")
         st.session_state.external_refs_enabled = st.checkbox("Enable external references", value=st.session_state.external_refs_enabled)
         # API status
-        gemini_key_present = bool(os.getenv("GEMINI_API_KEY") or ("GEMINI_API_KEY" in st.secrets))
-        openai_key_present = bool(os.getenv("OPENAI_API_KEY") or ("OPENAI_API_KEY" in st.secrets))
+        gemini_key_present = bool(os.getenv("GEMINI_API_KEY"))
+        openai_key_present = bool(os.getenv("OPENAI_API_KEY"))
+        # Only check st.secrets if available
+        try:
+            if "GEMINI_API_KEY" in st.secrets:
+                gemini_key_present = gemini_key_present or bool(st.secrets.get("GEMINI_API_KEY"))
+            if "OPENAI_API_KEY" in st.secrets:
+                openai_key_present = openai_key_present or bool(st.secrets.get("OPENAI_API_KEY"))
+        except Exception:
+            pass  # st.secrets not available
         st.caption(f"Gemini key: {'✅ found' if gemini_key_present else '❌ missing'} | OpenAI key: {'✅ found' if openai_key_present else '❌ optional'}")
         if not gemini_key_present:
             st.warning("⚠️ Add GEMINI_API_KEY to .env file or environment")
