@@ -55,6 +55,9 @@ load_dotenv(override=False)
 
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
+# Keep a module-level Gemini client for SDKs that use genai.Client
+GLOBAL_GENAI_CLIENT = None
+
 # Basic theme/styles
 st.markdown(
     """
@@ -85,7 +88,8 @@ def get_gemini_client_configured() -> bool:
             return True
         # Fallback older style client (rare)
         if hasattr(genai, "Client"):
-            _ = genai.Client(api_key=api_key)
+            global GLOBAL_GENAI_CLIENT
+            GLOBAL_GENAI_CLIENT = genai.Client(api_key=api_key)
             return True
     except Exception as _e:
         return False
@@ -112,9 +116,39 @@ def generate_response(prompt: str, mode_meta: dict = None, max_output_tokens: in
     reasoning = mode_meta.get("reasoning", "explain")
     assembled_prompt = f"{system_preamble}\nMode: {reasoning}\nExternalLinksAllowed: {external_flag}\n\n{prompt}"
 
-    # Try Gemini (new SDK first)
+    # Try Gemini (new SDKs first)
     if get_gemini_client_configured():
         try:
+            # Client-based SDKs (e.g., google-genai >=1.37 where Client exists)
+            if hasattr(genai, "Client") and GLOBAL_GENAI_CLIENT is not None and hasattr(GLOBAL_GENAI_CLIENT, "models"):
+                try_models = [
+                    MODEL_NAME_DEFAULT,
+                    "gemini-1.5-flash",
+                    "gemini-1.5-pro",
+                    "gemini-1.0-pro",
+                ]
+                last_err = None
+                for m in try_models:
+                    try:
+                        resp = GLOBAL_GENAI_CLIENT.models.generate_content(
+                            model=m,
+                            contents=assembled_prompt,
+                            generation_config={"max_output_tokens": max_output_tokens, "temperature": 0.2},
+                        )
+                        if hasattr(resp, "text") and resp.text:
+                            return resp.text
+                        # Attempt common response shapes
+                        try:
+                            return resp.candidates[0].content.parts[0].text
+                        except Exception:
+                            return str(resp)
+                    except Exception as ee:
+                        last_err = ee
+                        continue
+                if last_err is not None:
+                    raise last_err
+
+            # GenerativeModel-based SDKs
             if hasattr(genai, "GenerativeModel"):
                 try_models = [
                     MODEL_NAME_DEFAULT,
